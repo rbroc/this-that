@@ -1,0 +1,142 @@
+---
+title: "Preprocess Italian Data (2)"
+output: html_document
+---
+
+### Load data and take a look at the dataset
+```{r LoadPackages, message = FALSE}
+
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(ggplot2)
+library(sjPlot)
+library(reshape)
+
+#Set working directory and filenames
+#setwd("/Users/au571533/Dropbox/DeixisSurvey")
+filename = 'raw_data_IT_2.tsv'
+data_IT <- read.table(filename, sep = '\t', skip=1, header=TRUE, encoding = "utf-8", skipNul=TRUE)[-c(1),]
+
+# Rename columns and filter out unfinished responses
+data_IT <- reshape::rename(data_IT, c(Response.ID = 'ID',
+                                      Sei.madrelingua.italiano. = "Native", 
+                                      Indica.la.tua.et. = 'Age', 
+                                      Indica.il.tuo.sesso = 'Gender',
+                                      Indica.la.tua.lingua.madre. = 'Mother_Tongue', 
+                                      Contrassegna.le.parole.di.cui.NON.conosci.il.significato. = 'Which_Unknown',
+                                      Duration..in.seconds. = 'Duration',
+                                      Conosci.il.significato.di.tutte.le.parole.incontrate.nel.questionario. = 'All_Words_Known') 
+                                      )
+
+# Reformat some of the columns
+data_IT$Duration <- as.numeric(data_IT$Duration)
+data_IT <- subset(data_IT, Finished =="True")
+
+
+data_IT <- data_IT[, 1:(ncol(data_IT) - 1)]
+# Visualize data
+head(data_IT)
+rm(filename)
+```
+
+
+### Overall number of data points 
+```{r Descriptives, message=FALSE}
+
+paste('Total number of participants', as.character(nrow(data_IT)), sep = ': ')
+paste('Total number of native speakers', as.character(nrow(subset(data_IT, Native == 'Si'))), sep = ': ')
+paste('Number participants who knew the meaning of all words', as.character(nrow(subset(data_IT, Which_Unknown == ''))), sep = ': ')
+paste('Number female', as.character(nrow(subset(data_IT, Gender == 'F'))), sep = ': ')
+
+# Age distribution
+agg_age <- data_IT %>% group_by(Age) %>% dplyr::summarize(Number_participants= n())
+print('Age distribution')
+paste('    18-30', as.character(agg_age$Number_participants[1]), sep = ': ')
+paste('    30-40', as.character(agg_age$Number_participants[2]), sep = ': ')
+paste('    40-50', as.character(agg_age$Number_participants[3]), sep = ': ')
+paste('    50-60', as.character(agg_age$Number_participants[4]), sep = ': ')
+paste('    60+  ', as.character(agg_age$Number_participants[5]), sep = ': ')
+
+
+# Print duration
+paste('Average duration (in minutes)', as.character(mean(data_IT$Duration) / 60))
+
+# Clean up
+rm(agg_age)
+
+```
+
+### Delete useless columns
+```{r DropColsAndReshape, message = FALSE}
+
+# Drop columns
+#58, 59, 63
+data_IT<-data_IT[ , -c(1:8, 10:17)]
+
+# Reshape
+data_IT <- melt(data_IT, id=c('ID','Gender','Age','Native', 'Mother_Tongue','All_Words_Known','Which_Unknown'))
+
+# Remove datapoints with unknown words
+ID_unknown <- unique(subset(data_IT, Which_Unknown != '')$ID)
+row_drops_1 <- which(data_IT$ID == ID_unknown[1] & data_IT$variable %in% c('cinghiale', 'cerbiatto', 'vergogna'))
+row_drops_2 <- which(data_IT$ID == ID_unknown[2] & data_IT$variable == 'cupola')
+row_drops <- c(row_drops_1, row_drops_2)
+data_IT <- data_IT[-row_drops,]
+
+# Rename columns
+data_IT <- reshape::rename(data_IT, c(variable = 'Noun', value ='Demonstrative'))
+
+head(data_IT)
+
+# Remove useless variables
+rm(ID_unknown, row_drops_1, row_drops_2, row_drops)
+
+```
+
+
+### Info on experimental words
+
+```{r ExpWords, message=FALSE}
+
+Fillers_IT<-c('pace', 'promozione', 'sorpresa', 'cambiamento', 'sconfitta', 'delusione', 'vergogna', 'scomparsa')
+
+Animals_IT<-c('tigre', 'cobra', 'coccodrillo', 'cinghiale', 'zanzara', 'medusa', 'tarantola', 'zecca', 'giraffa', 'cavallo', 'delfino', 'cerbiatto', 'coniglio', 'farfalla', 'scoiattolo', 'passero')
+
+Bigger_IT <-c('meteorite', 'valanga', 'vulcano', 'bombardiere', 'tigre', 'cobra', 'coccodrillo', 'cinghiale', 'giraffa', 'cavallo', 'delfino', 'cerbiatto', 'scuola', 'quercia', 'contrabbasso', 'cupola')
+
+Harmful_IT <-c('tigre', 'cobra', 'coccodrillo', 'cinghiale', 'meteorite', 'valanga', 'vulcano','bombardiere', 'zanzara', 'medusa', 'tarantola', 'zecca', 'mina', 'veleno', 'proiettile', 'coltello')
+
+FemNouns_IT <- c('tigre', 'valanga', 'zanzara', 'medusa', 'tarantola','zecca', 'mina', 'giraffa', 'scuola', 'quercia', 'cupola', 'farfalla', 'tazza', 'scarpa', 'cucchiaio', 'mela')
+
+### Create column "Fillers" and resp. assign values "Fillers" and "Exp_words" based on values in $Noun
+data_IT$Fillers <- ifelse(data_IT$Noun %in% Fillers_IT, "Fillers", "Exp_words")
+data_IT$Fillers<-factor(data_IT$Fillers)
+
+### Create column "Animal" and resp. assign values "Animate" and "Non_Animate" based on values in $Noun
+data_IT$Animate <- ifelse(data_IT$Noun %in% Animals_IT, "Animate", "Non_Animate")
+data_IT$Animate<-factor(data_IT$Animate)
+
+### Create column "Size" and resp. assign values "Big" or "Small" based on values in $Noun
+data_IT$Size <- ifelse(data_IT$Noun %in% Bigger_IT, "Big", "Small")
+data_IT$Size<-factor(data_IT$Size)
+
+### Create column "Harm" and resp. assign values "Harmful" or "Harmless" based on values in $Noun
+data_IT$Harm <- ifelse(data_IT$Noun %in% Harmful_IT, "Harmful", "Harmless")
+data_IT$Harm<-factor(data_IT$Harm)
+
+# Values of Dems column as values in factor "Demonstratives"
+data_IT$Demonstrative <- ifelse(data_IT$Demonstrative %in% c('questo', 'questa'), 'proximal', 'distal')
+data_IT$Demonstrative<-factor(data_IT$Demonstrative)
+
+# Remove fillers and delete column
+data_IT <- subset(data_IT, Fillers != 'Fillers')
+data_IT <- data_IT[, !(colnames(data_IT) %in%  c('Fillers', 'Which_Unknown'))]
+
+# Re-visualize 
+head(data_IT)
+#write_tsv(data_IT, 'IT_2.txt')
+
+# Remove useless variables
+rm(Fillers_IT, Animals_IT, Bigger_IT, Harmful_IT)
+```

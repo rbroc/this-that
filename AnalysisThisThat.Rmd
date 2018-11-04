@@ -1,0 +1,731 @@
+---
+title: "This or That?"
+author: "Roberta Rocca"
+date: "23/04/2018"
+output:
+  html_document:
+    encoding: UTF-8
+---
+
+Analysis of data on crosslinguistic study on semantic preferences in demonstratives use.
+Data preprocessing performed separately for each dataset.
+Markdowns available in the **Preprocessing** subfolder.
+
+Run:
+Sys.setlocale(category = "LC_ALL", locale = "da_dk.utf-8")
+Sys.setlocale(category = "LC_MESSAGES", locale = "da_dk.utf-8")
+For a correct visualization of the Danish characters
+
+
+### Settings
+Set plot parameters and Danish encoding
+``` {r SetPlot, message = FALSE, warning = FALSE, echo = FALSE}
+library(sjPlot)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+
+# Set plot parameters
+set_theme(axis.textsize = 1,
+          axis.title.size = 1, 
+          title.size = 1, legend.size = 1, legend.title.size = 1, 
+          theme.font = 'Times New Roman')
+
+# Set Danish encoding
+Sys.setlocale(category = "LC_ALL", locale = "da_dk.utf-8")
+Sys.setlocale(category = "LC_MESSAGES", locale = "da_dk.utf-8")
+```
+
+### Analysis
+Includes logistic regression using categorical predictors per each dataset, as well as cumulative analysis.
+Also includes parametrized version using animacy, harmfulness and size scores.
+Loading the dataset with information on experimental words
+``` {r LoadAllData, message = FALSE, warning = FALSE}
+library(readr)
+library(lme4)
+library(dplyr)
+
+# Read in the dataframes with scores for experimental words along each dimension
+exp1 <- read.table('exp1.txt', sep = '\t', header = TRUE)
+exp2 <- read.table('exp2.txt', sep = '\t', header = TRUE)
+exp1 <- exp1[, c(1:(ncol(exp1) - 3))]
+exp2 <- exp2[, c(1:(ncol(exp2) - 3))]
+
+head(exp1)
+head(exp2)
+
+```
+
+Load the frequency data
+``` {r LoadFreqData, message = FALSE, warning = FALSE}
+
+# BNC
+freq_bnc <- read_tsv('freq_bnc.txt')
+# Danish
+freq_dk <- read_tsv('freq_dk.txt')
+freq_dk$Freq <- freq_dk$Freq / 2570.805
+#Italian
+freq_it <- read_tsv('freq_it.txt')
+freq_it$Freq <- freq_it$Freq / 5864.496
+# Merge all the frequency data in a single dataset.
+freq <- rbind(freq_bnc[, 2:3], freq_dk)
+freq <- rbind(freq, freq_it)
+
+```
+
+Read in the data from the experiment
+**Please note** that there might be issues with the encoding of Danish characters. 
+Check how they're read in, and change code accordingly.
+``` {r ExpData, message = FALSE, warning = FALSE}
+
+# Load experiment 1
+data_EN <- read.table('EN_1.txt', sep = '\t', header = TRUE)
+data_IT <- read.table('IT_1.txt', sep = '\t', header = TRUE)
+data_DK <- read.table('DK_1.txt', sep = '\t', header = TRUE)
+
+# Load experiment 2
+data_IT2 <- read.table('IT_2.txt', sep = '\t', header = TRUE)
+data_DK2 <- read.table('DK_2.txt', sep = '\t', header = TRUE)
+
+# Replace misprinted Danish characters
+data_DK$Noun <- plyr::mapvalues(data_DK$Noun, from=c('n.l', 'sm.kage', 'f.rekylling', 'g.s', 'hy.ne', 'f.ngsel', 'r.dhals', 's.be', 'b.nk', 'm.nt'), to=c('n??l', 'sm??kage', 'f??rekylling', 'g??s', 'hy??ne', 'f??ngsel', 'r??dhals', 's??be', 'b??nk', 'm??nt'))
+data_DK2$Noun <- plyr::mapvalues(data_DK2$Noun, from=c('skovfl.t', 'r.dyr', 'egetr.', 'X.ble'),to=c('skovfl??t', 'r??dyr', 'egetr??', '??ble'))
+
+# list of italian words for exp2
+it_words_2 <- c('tigre', 'cobra', 'coccodrillo', 'cinghiale', 'zanzara', 'medusa', 'tarantola', 'zecca','giraffa', 'cavallo', 'delfino', 'cerbiatto', 'coniglio', 'farfalla', 'scoiattolo', 'passero','meteorite', 'valanga', 'vulcano', 'bombardiere', 'mina', 'veleno', 'proiettile', 'coltello','scuola', 'quercia', 'contrabbasso', 'cupola', 'tazza', 'scarpa', 'cucchiaio', 'mela')
+# list of Danish words for exp2
+dk_words_2 <- c('tiger', 'kobra', 'krokodille', 'vildsvin', 'myg', 'giftgople', 'fugleedderkop', 'skovfl??t','giraf', 'hest', 'delfin', 'r??dyr', 'kanin', 'sommerfugl', 'egern', 'spurv','meteor', 'lavine', 'vulkan', 'bombefly', 'landmine', 'gift', 'patron', 'kniv','skole', 'egetr??', 'kontrabas', 'kuppel', 'krus', 'sko', 'ske', '??ble')
+# List of english words for exp 2
+
+exp_words_2 <- c('tiger', 'cobra', 'crocodile', 'boar', 'mosquito', 'jellyfish', 'tarantula', 'tick','giraffe', 'horse', 'dolphin','fawn', 'rabbit', 'butterfly','squirrel', 'sparrow', 'meteorite', 'avalanche', 'volcano', 'bomber', 'landmine', 'poison', 'bullet', 'knife',
+                 'school', 'oak', 'bass', 'dome', 'mug', 'shoe', 'spoon', 'apple')
+
+
+# Replace nouns in IT ad DK with English equivalents
+data_IT$NounEng <- plyr::mapvalues(data_IT$Noun, from=unique(as.character(data_IT$Noun)), to= unique(as.character(data_EN$Noun)))
+data_DK$NounEng <- plyr::mapvalues(data_DK$Noun, from=unique(as.character(data_DK$Noun)), to=unique(as.character(data_EN$Noun)))
+
+# Same for experiment 2
+data_IT2$NounEng <- plyr::mapvalues(data_IT2$Noun, from=it_words_2, to = exp_words_2)
+data_DK2$NounEng <- plyr::mapvalues(data_DK2$Noun, from=dk_words_2, to = exp_words_2)
+
+# Add Lang info to the dataset (for merging)
+data_IT$Lang <- 'IT'
+data_DK$Lang <- 'DK'
+data_EN$Lang <- 'EN'
+data_IT2$Lang <- 'IT'
+data_DK2$Lang <- 'DK'
+
+# Rename
+colnames(data_EN)[9] <- 'NounEng'
+data_EN$Noun <- data_EN$NounEng
+
+```
+
+Including info on experimental variables and merging all in single dataset
+``` {r MergeData, message = FALSE, warning = FALSE}
+
+# Merge dataset from experiment 1 with scores and category
+data_EN <- merge(data_EN, exp1, by.x = 'NounEng', by.y = 'Noun')
+data_IT <-merge(data_IT, exp1, by.x = 'NounEng', by.y = 'Noun')
+data_DK <-merge(data_DK, exp1, by.x = 'NounEng', by.y = 'Noun')
+
+# Merge Danish and English data
+data <- rbind(data_EN[, -c(7,8)], data_DK)
+# Add a column which is there in the Italian dataset
+data$Incorrect <- 'Correct'
+# Merge with Italian
+data <- rbind(data, data_IT[, -c(10)])
+# Add info on number of experiment
+data$ExpNr <- 1
+
+# Now merge data for exp2
+data_IT2 <-merge(data_IT2, exp2, by.x = 'NounEng', by.y = 'Noun')
+data_DK2 <-merge(data_DK2, exp2, by.x = 'NounEng', by.y = 'Noun')
+data2 <- rbind(data_IT2, data_DK2)
+data2$ExpNr <- 2
+data2$Incorrect <- 'Correct'
+
+# Merge data from the two experiments
+data_all <- rbind(data, data2)
+data_all$Noun <- plyr::mapvalues(data_all$Noun, from=c('b??nk', 'm??nt', 'sm??kage', 'f??rekylling',  'g??s', 'hy??ne', 'f??ngsel', 'n??l', 'r??dhals', 's??be', '??ble', 'r??dyr', 'egetr??', 'skovfl??t'), to = c('bænk', 'mønt', 'småkage', 'fårekylling', 'gås', 'hyæne', 'fængsel', 'nål', 'rødhals', 'sæbe', 'æble', 'rådyr', 'egetræ', 'skovflåt'))
+data_all <- merge(data_all, freq, by.x = 'Noun', by.y = 'Word')
+
+# Check small error
+data_all$Animate[data_all$NounEn %in% c('spider', 'kitten')] <- 'Animate'
+
+# Just because it's handy: also keep a copy of separate datasets
+data_IT <- subset(data_all, Lang == 'IT' & ExpNr == 1)
+data_DK <- subset(data_all, Lang == 'DK' & ExpNr == 1)
+data_EN <- subset(data_all, Lang == 'EN' & ExpNr == 1)
+data_IT2 <- subset(data_all, Lang == 'IT' & ExpNr == 2)
+data_DK2 <- subset(data_all, Lang == 'DK' & ExpNr == 2)
+
+```
+
+
+Proportion of proximal demonstratives across experimental variables for each of the languages and experiments
+``` {r CumulativePlots, message = FALSE, warning = FALSE, echo = FALSE}
+
+# Summarize the data by experimental variable for experiment 1
+agg_cat <- data %>% group_by(Lang, Animate, Size, Harm, Demonstrative) %>% summarize(count = n()) %>% mutate(prop = count/sum(count)) %>% data.frame()
+# Do the same for experiment 2
+agg_cat2 <- data2 %>% group_by(Lang, Animate, Size, Harm, Demonstrative) %>% summarize(count = n()) %>% mutate(prop = count/sum(count)) %>% data.frame()
+# Keep only info on proximal demonstratives
+agg_cat <- subset(agg_cat, Demonstrative == 'proximal')
+levels(agg_cat$Animate)[levels(agg_cat$Animate) == 'Non_Animate'] <- 'Inanimate'
+agg_cat2 <- subset(agg_cat2, Demonstrative == 'proximal')
+levels(agg_cat2$Animate)[levels(agg_cat2$Animate) == 'Non_Animate'] <- 'Inanimate'
+
+# Special plot for Italian data from the first experiment: inspect effect of soundness of the demonstrative/noun match
+it_cat <- subset(data, Lang == 'IT') %>% group_by(Incorrect, Size, Harm, Demonstrative) %>% summarize(count = n()) %>% mutate(prop = count/sum(count))
+it_cat <- subset(it_cat, Demonstrative == 'proximal')
+
+# Create plots
+plot_CAT <- ggplot(data = subset(agg_cat)) + 
+  geom_bar(aes(x = Harm, y = prop, fill = Size), stat = 'identity', position = 'dodge', alpha = 0.7) +
+  facet_grid(Lang~Animate) + 
+  geom_hline(yintercept = 0.5, linetype = 'dashed') +
+  xlab('') + ylab('Proportion proximal demonstratives') + ggtitle('')+
+  scale_fill_brewer(palette="Set1") + 
+  
+  theme(strip.text = element_text(size = 12), strip.background =element_rect(fill="white"), axis.title.y = element_text(size = 12),
+        legend.text = element_text(size = 12), legend.title = element_text(size = 12)) +
+  
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+plot2_CAT <- ggplot(data = subset(agg_cat2)) +
+  geom_bar(aes(x = Harm, y = prop, fill = Size), stat = 'identity', position = 'dodge', alpha = 0.7) +
+  facet_grid(Lang~Animate) + 
+  geom_hline(yintercept = 0.5, linetype = 'dashed') +
+  xlab('') + ylab('Proportion proximal demonstratives')+ ggtitle('')+
+  scale_fill_brewer(palette="Set1")+ 
+ 
+  theme(strip.text = element_text(size = 12), strip.background =element_rect(fill="white"), axis.title.y = element_text(size = 12),
+        legend.text = element_text(size = 12), legend.title = element_text(size = 12)) +
+  
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+plot_IT_cat <- ggplot(data = subset(it_cat)) +
+  geom_bar(aes(x = Harm, y = prop, fill = Size), stat = 'identity', position = 'dodge', alpha = 0.7) +
+  facet_wrap(~Incorrect) +
+  geom_hline(yintercept = 0.5, linetype = 'dashed') +
+  xlab('') + ylab('Proportion proximal demonstratives') +
+  scale_fill_brewer(palette="Set1")+ 
+   
+  theme(strip.text = element_text(size = 12), strip.background =element_rect(fill="white"), axis.title.y = element_text(size = 12),
+        legend.text = element_text(size = 12), legend.title = element_text(size = 12)) +
+  
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+
+# Print out the plots
+plot_CAT
+plot2_CAT
+plot_IT_cat
+
+```
+
+Stats: mixed-effects logistic regression for each of the experiments.
+Same model used for all languages, fixed effects structure including all the experimental factors and full interaction structure.
+Random effects structure include random intercept for ID.
+More complicated random effects structure fitted in the overall model.
+
+#### Experiment 1
+
+``` {r StatsAll, message = FALSE, warning = FALSE}
+
+# Model all data, add fixed effect of language and interactions
+model_1 <- glmer(data = subset(data_all, !(ExpNr == 2)), 
+                 factor(Demonstrative) ~ Animate * Size * Harm * Lang + (1|ID), 
+                 family = 'binomial', 
+                 glmerControl(optimizer="bobyqa", optCtrl = list(maxfun = 100000)))
+summary(model_1)
+
+```
+
+Zoom: Italian data
+``` {r StatsIta, message = FALSE, warning = FALSE}
+it_log1 <- glmer(data = data_IT, 
+                 factor(Demonstrative) ~ Animate * Size * Harm + (1|ID), 
+                 family = 'binomial', 
+                 glmerControl(optimizer="bobyqa", optCtrl = list(maxfun = 100000)))
+summary(it_log1)
+```
+
+Compare previous model for Italian with one taking into account the soundness of the coupling between noun and distal demonstratives
+``` {r StatsItaCorrect, message = FALSE, warning = FALSE}
+ 
+it_corr <-glmer(data = data_IT, 
+                factor(Demonstrative) ~ Animate * Size * Harm + Incorrect + Incorrect:Animate + Incorrect:Harm + Incorrect:Size + (1|ID), 
+                family = 'binomial', 
+                glmerControl(optimizer="bobyqa", optCtrl = list(maxfun = 100000)))
+
+# Compare the model with the previous one
+anova(it_log1, it_corr)
+
+# Visualize result of the model
+summary(it_corr)
+```
+
+
+Model for experiment 2
+``` {r StatsAll2, message = FALSE, warning = FALSE}
+
+# Model all data, add fixed effect of language and interactions
+model_2 <- glmer(data = subset(data_all, !(ExpNr == 1)), 
+                 factor(Demonstrative) ~ Animate * Size * Harm * Lang + (1|ID), 
+                 family = 'binomial', 
+                 glmerControl(optimizer="bobyqa", optCtrl = list(maxfun = 100000)))
+
+summary(model_2)
+```
+
+### Overall analysis
+Adding more complex random effects structure (exclude Italian data)
+``` {r StatsAllRFX, message = FALSE, warning = FALSE}
+
+model_rfx <- glmer(data = subset(data_all, !(Lang == 'IT' & ExpNr == 1)), 
+                   factor(Demonstrative) ~ Animate * Size * Harm * Lang + (1|ID) + (1|Animate:NounEng) + (1|Size:NounEng) + (1|Harm:NounEng), 
+                   family = 'binomial', 
+                   glmerControl(optimizer="bobyqa", optCtrl = list(maxfun = 100000)))
+summary(model_rfx)
+
+```
+
+#### Parametric version of the analysis
+Here we look at whether the effects found in the logistic analysis are confirmed when using 1-5 scores for size and harmfulness.
+Scores are taken from the Sudre et al. (2012) database for experiment one, whereas for experiment two, scores are predicted using SVR on GloVe word vectors to predict 1-5 scores. Models are tuned and trained on words from Sudre et al. (2012).
+``` {r StatsParam, message = TRUE, warning = TRUE}
+
+# All parametric model
+all_par <- glmer(data = subset(data_all, !(ExpNr == 1 & Lang == 'IT')), 
+                 Demonstrative ~ Animate + as.numeric(SizeScore) + as.numeric(HarmScore) + Animate:as.numeric(SizeScore) + Animate:as.numeric(HarmScore)+ (1|ID), 
+                 family = 'binomial', 
+                 glmerControl(optimizer="bobyqa", optCtrl = list(maxfun = 100000)))
+
+summary(all_par)
+
+```
+
+### Frequency
+Are there systematic differences in **frequency** between levels of our experimental variables, which might confound the results?
+We looked up word frequencies in all of the language, plotted it and ran statistical tests.
+First step: read in the frequency data for English: BNC data
+Data extracted from <http://ucrel.lancs.ac.uk/bncfreq/>, updated to 2001. 
+Values refer to rounded lemma frequency per million token.
+``` {r ReadBNC, message = FALSE, warning = FALSE}
+library(readr)
+
+# Read in TSV with frequency data for all the words in the two experiments
+freq_bnc <- read_tsv('freq_bnc.txt')
+
+# Only keep relevant columns (i.e. delete empty index value)
+freq_bnc <- freq_bnc[, 2:3]
+
+# Add info on experimental categories 
+freq_bnc$Animate <- c(1,0,0,1,0,1,0,0,0,0,0,1,0,1,1,1,0,1,1,0,1,1,0,1,0,1,1,1,0,1,0,0,0,0,0,1,0,0,1,1,1,1,0,1,1,1,1,0,0,0,1,0,0,0,1,0,0,1,0,1,1,1,1,0)
+
+freq_bnc$Harm <- c(1,0,1,1,1,0,0,0,0,0,0,0,1,1,0,1,1,0,0,1,0,1,1,0,1,1,0,1,0,1,0,1,0,1,0,1,1,1,0,1,1,0,0,0,0,0,1,1,1,1,1,0,0,1,0,0,0,0,0,0,1,1,1,1)
+
+freq_bnc$Size<- c(0,1,1,1,0,1,0,0,0,1,1,0,0,0,1,1,1,0,1,0,1,0,1,0,1,1,0,1,0,0,1,0,0,1,1,1,1,0,0,1,1,1,1,1,1,1,0,0,1,0,0,0,1,0,0,1,0,0,0,0,0,0,1,1)
+
+# Recode to nicer category values
+freq_bnc$Animate <- ifelse(freq_bnc$Animate == 1, 'Animate', 'Inanimate')
+freq_bnc$Harm <- ifelse(freq_bnc$Harm == 1, 'Harmful', 'Harmless')
+freq_bnc$Size <- ifelse(freq_bnc$Size == 1, 'Big', 'Small')
+
+# Add info on which experiment each word belongs to
+freq_bnc$Exp <- c(rep(1,32), rep(2,32))
+head(freq_bnc)
+```
+
+Boxplots displaying frequencies by experimental factor for experiment one
+``` {r FreqExp1, message = FALSE, warning = FALSE, echo = FALSE}
+
+# By animacy
+bnc_anim_1 <- ggplot(data = subset(freq_bnc, Exp == 1), aes(x = Animate, y = Freq)) +
+  geom_boxplot(aes (fill = Animate), alpha = 0.7) +
+  ylab('Frequency') + xlab('')  +
+  guides(fill = FALSE) + # No legend
+  geom_text_repel(aes(label = ifelse(Freq > 30, Word, ''))) + # Add labels for outliers
+  scale_fill_brewer(palette="Set1") +
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+# By harm
+bnc_harm_1 <- ggplot(data = subset(freq_bnc, Exp == 1), aes(x = Harm, y = Freq)) +
+  geom_boxplot(aes (fill = Harm), alpha = 0.7) +
+  ylab('') + xlab('')  +
+  guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(Freq > 35, Word, ''))) +
+  scale_fill_brewer(palette="Set1") + 
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+# By size
+bnc_size_1 <- ggplot(data = subset(freq_bnc, Exp == 1), aes(x = Size, y = Freq)) +
+  geom_boxplot(aes (fill = Size), alpha = 0.7) +
+  ylab('') + xlab('')  +
+  guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(Size == 'Big' & Freq > 25, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+bnc_anim_1
+bnc_harm_1
+bnc_size_1
+
+```
+
+Boxplots for frequencies by experimental factor for experiment 2
+``` {r Exp2, warning = FALSE, message = FALSE, echo = FALSE}
+
+# By animacy
+bnc_anim_2 <- ggplot(data = subset(freq_bnc, Exp == 2), aes(x = Animate, y = Freq)) +
+  geom_boxplot(aes (fill = Animate), alpha = 0.7) + ylab('Frequency') + xlab('')  + guides(fill = FALSE)+
+  geom_text_repel(aes(label = ifelse(Freq > 40, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+# By harm 
+bnc_harm_2 <- ggplot(data = subset(freq_bnc, Exp == 2), aes(x = Harm, y = Freq)) +
+  geom_boxplot(aes (fill = Harm), alpha = 0.7) + ylab('') + xlab('')  + guides(fill = FALSE)+
+  geom_text_repel(aes(label = ifelse(((Harm == 'Harmful' & Freq > 30) | (Harm == 'Harmless' & Freq > 100)), Word, ''))) +
+  scale_fill_brewer(palette="Set1") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+# By size
+bnc_size_2 <- ggplot(data = subset(freq_bnc, Exp == 2), aes(x = Size, y = Freq)) +
+  geom_boxplot(aes (fill = Size), alpha = 0.7) + ylab('') + xlab('')  + guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(Freq > 40, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+bnc_anim_2
+bnc_harm_2
+bnc_size_2
+
+```
+
+Test if there any any significant differences in word frequency across the three categories (English)
+Trying to rule out the possibility that any effect would be driven by word frequency
+``` {r FreqModel, message = FALSE, warning = FALSE}
+library(lme4)
+library(lmerTest)
+library(car)
+
+# Fit linear model
+bnc_lm <- lm(data = subset(freq_bnc, Exp == 1), Freq ~ Animate * Harm * Size)
+bnc_lm2 <- lm(data = subset(freq_bnc, Exp == 2), Freq ~ Animate * Harm * Size)
+
+# Look up summaries 
+Anova(bnc_lm)
+Anova(bnc_lm2)
+
+```
+
+There does not seem to be any significant difference. 
+Let's run the same control tests for Danish. 
+Frequencies here are drawn from the Danish web corpus daTenTen, version 2017. 
+For info on these corpora see: <https://en.wikipedia.org/wiki/TenTen_Corpus_Family>.
+Data have been downloaded via <https://www.sketchengine.eu>.
+As for English, values stand for lemma frequency per million words.
+
+``` {r ReadFreq, warning = FALSE, message = FALSE}
+
+# Read in frequency file for Danish
+freq_dk <- read_tsv('freq_dk.txt')
+
+# Add experimental information on words (both experiments)
+animals_dk=c('bi', 'lam', 'rødhals', 'fårekylling', 'gås', 'tyr', 'pingvin', 'haj', 'kamel',
+             'hyæne', 'reje', 'edderkop','rotte', 'loppe', 'slange', 'killing','tiger',
+             'kobra', 'krokodille', 'vildsvin', 'myg', 'giftgople', 'fugleedderkop', 'skovflåt', 'giraf',
+             'hest', 'delfin', 'rådyr', 'kanin' ,'sommerfugl','egern','spurv')
+
+big_dk=c('tyr', 'hyæne', 'slange', 'haj', 'kamel', 'gås', 'lam', 'pingvin',
+         'bombe', 'fængsel', 'missil', 'riffel', 'bænk', 'sofa', 'vugge', 'telt',
+         'meteor', 'lavine', 'vulkan', 'bombefly', 'tiger', 'kobra', 'krokodille', 'vildsvin',
+         'giraf', 'hest', 'delfin', 'rådyr' ,'skole','egetræ','kontrabas','kuppel')
+
+harmful_dk=c('tyr', 'hyæne', 'haj', 'slange', 'bi', 'loppe', 'edderkop', 'rotte',
+             'bombe', 'fængsel', 'missil', 'riffel', 'blus', 'dolk', 'nål', 'torn',
+             'tiger', 'kobra', 'krokodille','vildsvin','meteor', 'lavine', 'vulkan', 'bombefly',
+             'myg', 'giftgople', 'fugleedderkop', 'skovflåt', 'landmine', 'gift', 'patron', 'kniv')
+
+dk_words_2 <- c('tiger', 'kobra', 'krokodille', 'vildsvin', 'myg', 'giftgople', 'fugleedderkop', 'skovflåt',
+                'giraf', 'hest', 'delfin', 'rådyr', 'kanin', 'sommerfugl', 'egern', 'spurv',
+                'meteor', 'lavine', 'vulkan', 'bombefly', 'landmine', 'gift', 'patron', 'kniv',
+                'skole', 'egetræ', 'kontrabas', 'kuppel', 'krus', 'sko', 'ske', 'æble')
+
+# Add this info to the frequency dataset
+freq_dk$Animate <- ifelse(freq_dk$Word %in% animals_dk, 'Animate', 'Inanimate')
+freq_dk$Size <- ifelse(freq_dk$Word %in% big_dk, 'Big', 'Small')
+freq_dk$Harm <- ifelse(freq_dk$Word %in% harmful_dk, 'Harmful', 'Harmless')
+# Add info on experiment number
+freq_dk$Exp <- ifelse(freq_dk$Word %in% dk_words_2, 2, 1)
+# Rescale frequency per million words
+freq_dk$PerMillion <- freq_dk$Freq / 2570.805 # Million words in the corpus
+
+head(freq_dk)
+```
+
+Boxplot displaying frequency for **Danish** words, experiment 1
+``` {r PlotFreqDK, message = FALSE, warning = FALSE, echo = FALSE}
+
+# By animacy
+dk_anim_1 <- ggplot(data = subset(freq_dk, Exp == 1), aes(x = Animate, y = PerMillion)) +
+  geom_boxplot(aes (fill = Animate), alpha = 0.7) + ylab('Frequency') + xlab('')  + guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(Animate == 'Animate' & PerMillion > 15, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+# By harmfulness
+dk_harm_1 <- ggplot(data = subset(freq_dk, Exp == 1), aes(x = Harm, y = PerMillion)) +
+  geom_boxplot(aes (fill = Harm), alpha = 0.7) + ylab('') + xlab('')  + guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(Freq > 60000, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+# By size
+dk_size_1 <- ggplot(data = subset(freq_dk, Exp == 1), aes(x = Size, y = PerMillion)) +
+  geom_boxplot(aes (fill = Size), alpha = 0.7, ) + ylab('') + xlab('')  + guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(Size == 'Small' & Freq > 50000, Word, ''))) +
+  scale_fill_brewer(palette="Set1") +
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+dk_anim_1
+dk_harm_1
+dk_size_1
+
+```
+
+Boxplot displaying word frequency distribution for experiment 2 (Danish)
+``` {r PlotFreqDK2, message = FALSE, warning = FALSE, echo = FALSE}
+
+# By animacy
+dk_anim_2 <- ggplot(data = subset(freq_dk, Exp == 2), aes(x = Animate, y = PerMillion)) +
+  geom_boxplot(aes (fill = Animate), alpha = 0.7) + ylab('Frequency') + xlab('')  + guides(fill = FALSE)+
+  geom_text_repel(aes(label = ifelse(Animate == 'Animate' & PerMillion > 10 | Animate == 'Inanimate' & PerMillion > 50, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+# By harmfulness
+dk_harm_2 <- ggplot(data = subset(freq_dk, Exp == 2), aes(x = Harm, y = PerMillion)) +
+  geom_boxplot(aes (fill = Harm), alpha = 0.7) + ylab('') + xlab('')  + guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(((Harm == 'Harmful' & Freq > 30000) | (Harm == 'Harmless' & Freq > 125000)), Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+# By size
+dk_size_2 <- ggplot(data = subset(freq_dk, Exp == 2), aes(x = Size, y = PerMillion)) +
+  geom_boxplot(aes (fill = Size), alpha = 0.7) + ylab('') + xlab('')  + guides(fill = FALSE)+
+  geom_text_repel(aes(label = ifelse(Freq > 125000, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+dk_anim_2
+dk_harm_2
+dk_size_2
+
+```
+
+Are there any significant differences in words frequency for Danish?
+``` {r ModelFreqDK, message = FALSE, warning = FALSE}
+
+# Run linear regression (same FFX structure as the analyis)
+dk_lm1 <- lm(data = subset(freq_dk, Exp == 1), PerMillion ~ Animate * Harm * Size)
+dk_lm2 <- lm(data = subset(freq_dk, Exp == 2), PerMillion ~ Animate * Harm * Size)
+
+# Visualize results
+Anova(dk_lm1)
+Anova(dk_lm2)
+
+```
+
+Check word frequency for Italian
+As for Danish, word frequencies were extracted from from the itTenTen corpus, version 2017, using <https://www.sketchengine.eu>.
+Values denote lemma frequency per million words.
+``` {r DataImport, message = FALSE, warning = FALSE}
+
+# Read in the frequency dataframe
+freq_it <- read_tsv('freq_it.txt')
+
+# Add info on Animacy (looks clumsy but it is correct ;) )
+freq_it$Animate <- c(1,0,0,0,0,0,0,1,0,0,1,0,0,0,1,1,1,0,1,1,0,1,1,0,1,1,1,1,0,0,1,1,0,1,0,0,0,0,0,1,1,0,0,0,1,1,0,0,0,1,1,0,1,1,0,1,0,1,0,1,1,1,1,1)
+# Add info on experimental words
+big_it <-c('iena', 'toro', 'cammello', 'agnello', 'pinguino', 'oca','squalo', 'serpente', 
+           'prigione', 'panca', 'razzo', 'tenda', 'divano', 'fucile', 'culla', 'bomba' ,
+           'meteorite', 'valanga', 'vulcano', 'bombardiere', 'tigre', 'cobra', 'coccodrillo', 'cinghiale',
+           'giraffa', 'cavallo', 'delfino', 'cerbiatto', 'scuola', 'quercia', 'contrabbasso', 'cupola')
+harm_it <-c('toro', 'iena', 'squalo', 'serpente', 'ape', 'pulce', 'ragno', 'ratto',
+            'bomba', 'prigione','razzo', 'fucile', 'bruciatore', 'pugnale', 'ago', 'spina',
+            'tigre', 'cobra', 'coccodrillo', 'cinghiale', 'meteorite', 'valanga', 'vulcano','bombardiere',
+            'zanzara', 'medusa', 'tarantola', 'zecca', 'mina', 'veleno', 'proiettile', 'coltello')
+it_words_2 <- c('tigre', 'cobra', 'coccodrillo', 'cinghiale', 'zanzara', 'medusa', 'tarantola', 'zecca',
+                'giraffa', 'cavallo', 'delfino', 'cerbiatto', 'coniglio', 'farfalla', 'scoiattolo', 'passero',
+                'meteorite', 'valanga', 'vulcano', 'bombardiere', 'mina', 'veleno', 'proiettile', 'coltello',
+                'scuola', 'quercia', 'contrabbasso', 'cupola', 'tazza', 'scarpa', 'cucchiaio', 'mela')
+
+# Add info on experimental factors per word to the dataframe
+freq_it$Animate <- ifelse(freq_it$Animate == 1, 'Animate', 'Inanimate')
+freq_it$Size <- ifelse(freq_it$Word %in% big_it, 'Big', 'Small')
+freq_it$Harm <- ifelse(freq_it$Word %in% harm_it, 'Harmful', 'Harmless')
+# Add info on experiment number and convert raw frequencies to frequency per million words
+freq_it$Exp <- ifelse(freq_it$Word %in% it_words_2, 2, 1)
+freq_it$PerMillion <- freq_it$Freq / 5864.496 #Million words in the corpus
+
+```
+
+Plot frequencies for experiment 1, **Italian**
+``` {r PlotFreqIta, message = FALSE, warning = FALSE, echo = FALSE}
+
+# By animacy
+it_anim_1 <- ggplot(data = subset(freq_it, Exp == 1), aes(x = Animate, y = PerMillion)) +
+  geom_boxplot(aes (fill = Animate), alpha = 0.7) + ylab('Frequency') + xlab('')  + guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(Animate == 'Animate' & PerMillion > 10, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+# By harmfulness
+it_harm_1 <- ggplot(data = subset(freq_it, Exp == 1), aes(x = Harm, y = PerMillion)) +
+  geom_boxplot(aes (fill = Harm), alpha = 0.7) + ylab('') + xlab('')  + guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(PerMillion > 30, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+# By size
+it_size_1 <- ggplot(data = subset(freq_it, Exp == 1), aes(x = Size, y = PerMillion)) +
+  geom_boxplot(aes (fill = Size), alpha = 0.7) + ylab('') + xlab('')  + guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(PerMillion >17, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+it_anim_1
+it_harm_1
+it_size_1
+```
+
+Plot word frequency for experiment 2
+``` {r PlotFreq2, message = FALSE, warning = FALSE, echo = FALSE}
+
+# By animacy
+it_anim_2 <- ggplot(data = subset(freq_it, Exp == 2), aes(x = Animate, y = PerMillion)) +
+  geom_boxplot(aes (fill = Animate), alpha = 0.7) + ylab('Frequency') + xlab('')  + guides(fill = FALSE)+
+  geom_text_repel(aes(label = ifelse(PerMillion > 30, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+# By harmfulness
+it_harm_2 <- ggplot(data = subset(freq_it, Exp == 2), aes(x = Harm, y = PerMillion)) +
+  geom_boxplot(aes (fill = Harm), alpha = 0.7) + ylab('') + xlab('')  + guides(fill = FALSE)+
+  geom_text_repel(aes(label = ifelse(PerMillion > 50 | Harm == 'Harmful' & PerMillion > 10, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+# By size
+it_size_2 <- ggplot(data = subset(freq_it, Exp == 2), aes(x = Size, y = PerMillion)) +
+  geom_boxplot(aes (fill = Size), alpha = 0.7) + ylab('') + xlab('')  + guides(fill = FALSE) +
+  geom_text_repel(aes(label = ifelse(PerMillion > 23, Word, ''))) +
+  scale_fill_brewer(palette="Set1")+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'))
+
+it_anim_2
+it_harm_2
+it_size_2
+
+```
+
+Run statistical model to check for differences in frequency across experimental factors
+``` {r FreqModIT, message = FALSE, warning = FALSE}
+
+# Estimate linear regression model
+it_lm1 <- lm(data = subset(freq_it, Exp == 1), PerMillion ~ Animate * Harm * Size)
+it_lm2 <- lm(data = subset(freq_it, Exp == 2), PerMillion ~ Animate * Harm * Size)
+
+# Visualize results
+Anova(it_lm1)
+Anova(it_lm2)
+
+```
+
+### Crosslinguistic differences word-by-word
+X and y axis display **proportion of distal demonstratives** (more intuitive)
+``` {r LangDiffPlot, message = FALSE, warning = FALSE}
+
+# Experiment 2
+Lang_summ <- subset(data_all, !(ExpNr == 1 & Lang == 'IT')) %>% group_by(Lang, ExpNr, NounEng, Animate, Size, Harm, Demonstrative) %>% summarize(count = n()) %>% mutate(PropProximal = count / sum(count))
+Lang_summ <- subset(Lang_summ, Demonstrative == 'proximal')
+
+Lang_summ_DK <- subset(Lang_summ, ExpNr == 2 & Lang == 'DK')
+Lang_summ_IT <- subset(Lang_summ, ExpNr == 2 & Lang == 'IT')
+Lang_summ2 <- cbind(Lang_summ_DK, Lang_summ_IT)[, c(1:9,18)]
+colnames(Lang_summ2)[10] <- 'PropProxITA'
+
+p1 <- ggplot(data = subset(Lang_summ2), aes(y = 1 - PropProxITA , x = 1 - PropProximal)) + geom_point(aes(color = Harm, shape = Size)) + geom_smooth(method='lm', color = 'black', size = 0.2,  se = F, linetype = 'dashed') + xlab('Danish') + ylab('Italian') + scale_color_brewer(palette = 'Set1')+
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'),
+        text = element_text(size = 12)) +
+  geom_text_repel(aes(label = NounEng))
+  
+# Same for English
+Lang_summ_EN1 <- subset(Lang_summ, ExpNr == 1 & Lang == 'EN')
+Lang_summ_DK1 <- subset(Lang_summ, ExpNr == 1 & Lang == 'DK')
+Lang_summ1 <- cbind(Lang_summ_DK1, Lang_summ_EN1)[, c(1:9,18)]
+colnames(Lang_summ1)[10] <- 'PropProxEN'
+
+p2 <- ggplot(data = subset(Lang_summ1), aes(y = 1 - PropProxEN , x = 1- PropProximal)) + geom_point(aes(color = Harm, shape = Size)) +
+  geom_smooth(method='lm', color = 'black', size = 0.2,  se = F, linetype = 'dashed', fullrange = TRUE) + 
+  xlab('Danish') + ylab('English')+ scale_color_brewer(palette = 'Set1')+ 
+  theme(panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted'),
+        text = element_text(size = 12)) +
+  geom_text_repel(aes(label = NounEng))
+  
+p1
+p2
+
+```

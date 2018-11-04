@@ -1,0 +1,266 @@
+---
+title: "SVR score prediction"
+author: "Roberta Rocca"
+date: "23/04/2018"
+output:
+  html_document:
+    df_print: paged
+    encoding: UTF-8
+---
+
+
+Prediction of animacy, harmfulness and size scores for second set of words via *SVR*
+
+Support vector regression trained on GloVe 300-d vector representations on words to predict scores from the Sudre et al. (2012) database. The best performing model is then used to predict values for words in the second experiment, which are not included in the database. 
+
+Preliminary step: set plot parameters and Danish encoding
+``` {r SetPlot, message = FALSE, warning = FALSE}
+library(sjPlot)
+library(ggplot2)
+library(cowplot)
+
+# Set plot parameters
+set_theme(axis.textsize.y = 0.8,
+          axis.textsize.x = 1, 
+          axis.title.size = 1.5, 
+          title.size = 2, legend.size = 1.5, legend.title.size = 1.5, theme.font = 'Times New Roman')
+
+# Set Danish encoding
+Sys.setlocale(category = "LC_ALL", locale = "da_dk.utf-8")
+Sys.setlocale(category = "LC_MESSAGES", locale = "da_dk.utf-8")
+Sys.setlocale(category = "LC_NUMERIC", locale = "da_dk.utf-8")
+```
+
+Loading datasets with vector representations
+```{r LoadVariables, message = FALSE, warning = FALSE}
+
+# load the library
+library(e1071)
+library(readr)
+
+# Load vector representations for all words present in the Sudre et al. (2012) dataset
+wv_db <- read.delim('bow_words_glove.txt', sep = '', header = F)
+# Rename ID column for each word
+colnames(wv_db)[1] <- 'Noun'
+
+
+# Read in the Sudre et al. (2012) database
+setwd('BOW_Data')
+words_df <- read_csv('bagOfWords.csv')
+# Keep only relevant columns and rename them
+words_df <- words_df[, c(1,2,11, 87, 88, 214, 215)]
+colnames(words_df) <- c('Noun', 'animacy', 'tool', 'size_loaf', 'size_mic', 'scary', 'harm')
+# Add binary information on animacy
+words_df$Animate <- as.factor(ifelse(words_df$animacy >= 3, 1, 0))
+
+# Merge the vector representations with further info from the database
+all_df <- merge(words_df, wv_db, by = 'Noun')
+all_df$Harm <- as.factor(ifelse(all_df$harm >= 3, 1, 0))
+all_df$SizeLoaf <- as.factor(ifelse(all_df$size_loaf >= 3, 1, 0))
+all_df$SizeMW <- as.factor(ifelse(all_df$size_mic >= 3, 1, 0))
+
+# Take a look at the resulting dataset
+head(all_df)
+
+# Remove useless variables
+rm(wv_df, words_df)
+```
+
+Now load vector representations for the stimulus words in the second experiment, and exclude any words from the second experiments from the Sudre et al. (2012), as they will all be used as test set.
+```{r InfoExpWords, message = FALSE, warning = FALSE}
+
+# Load vector representations of words from the second experiment
+wv_exp2 <- read.delim('expwords_glove_2.txt', sep = '', header = F)
+colnames(wv_exp2)[1] <- 'Noun'
+
+# List experimental words
+exp_words_2 <- c('tiger', 'cobra', 'crocodile', 'boar', 'mosquito', 'jellyfish', 'tarantula', 'tick',
+                 'giraffe', 'horse', 'dolphin','fawn', 'rabbit', 'butterfly','squirrel', 'sparrow',
+                 'meteorite', 'avalanche', 'volcano', 'bomber', 'landmine', 'poison', 'bullet', 'knife',
+                 'school', 'oak', 'bass', 'dome', 'mug', 'shoe', 'spoon', 'apple')
+
+# Info on "true" categories for words in experiment 2 (qualitative)
+animates <- exp_words_2[1:16]
+danger <- exp_words_2[c(1:8,17:24)]
+big <- exp_words_2[c(1:4,9:12,17:20,25:28)]
+
+# Add columns with "true" category to the dataset
+wv_exp2$Animate <- as.factor(ifelse(wv_exp2$Noun %in% animates, 'Animate', 'NonAnimate'))
+wv_exp2$Size <- as.factor(ifelse(wv_exp2$Noun %in% big, 'Big', 'Small'))
+wv_exp2$Harm <- as.factor(ifelse(wv_exp2$Noun %in% danger, 'Harmful', 'Harmless'))
+
+# Exclude words from second experiment from the Sudre dataset + vector representations
+all_df <- subset(all_df, !(Noun %in% exp_words_2))
+```
+
+Next step: train **support vector regression** models on Sudre dataset to predict scores from previous experiment.
+Allow tuning of the model to optimize model performance.
+No scaling of parameters, to make the prediction less sensitive to the low number of datapoints in the second experiment.
+Three separate models are trained to predict the animacy score, the harmfulness score and the size score.
+Note that original values range in an ordinal scale from 1 to 5.
+
+``` {r TrainModels, message = FALSE, warning = FALSE}
+
+# Implement support vector regression to predict new data
+colnames_vec <- colnames(wv_exp2)[2:(ncol(wv_exp2)-3)]
+print(colnames_vec)
+
+# Tune models
+# Step size (epsilon) ranging from 0 to 1 (by 0.1); 
+# Cost function ranging from 2^2 to 2^9. 
+tuneAnimacy <- tune(svm, data = all_df[, c(colnames_vec, 'animacy')], animacy ~ ., ranges = list(epsilon = seq(0,1,0.1), cost = 2^(2:9)), scale = FALSE)
+tuneHarm <- tune(svm, data = all_df[, c(colnames_vec, 'harm')], harm ~ ., ranges = list(epsilon = seq(0,1,0.1), cost = 2^(2:9)), scale = FALSE)
+tuneSize <- tune(svm, data = all_df[, c(colnames_vec, 'size_loaf')], size_loaf ~ ., ranges = list(epsilon = seq(0,1,0.1), cost = 2^(2:9)), scale = FALSE)
+
+# Visualize selected models
+modAnimacy <- tuneAnimacy$best.model
+modHarm <- tuneHarm$best.model
+modSize <- tuneSize$best.model
+
+```
+
+Apply best models to the test sets
+``` {r Predict, message = FALSE, warning = FALSE}
+
+# Predict new values
+pred_animacy <- predict(modAnimacy, wv_exp2[, colnames_vec], scale = FALSE)
+pred_harm <- predict(modHarm, wv_exp2[, colnames_vec], scale = FALSE)
+pred_size <- predict(modSize, wv_exp2[, colnames_vec])
+
+# Visualize predictions
+# Initialize an empty dataframe
+preds <- data.frame(matrix(ncol = 0, nrow = 32))
+rownames(wv_exp2) <- wv_exp2$Noun
+# Add column with Word name
+preds$Word <- rownames(wv_exp2)
+
+# Add info on predicted score for animacy and true category for the dataset
+preds$Anim <- pred_animacy
+preds$AnimCat <- wv_exp2$Animate
+# Add info on predicted score for size and true category for the dataset
+preds$Size <- pred_size
+preds$SizeCat <- wv_exp2$Size
+# Add info on predicted score for harm and true category for the dataset
+preds$Harm <- pred_harm
+preds$HarmCat <- wv_exp2$Harm
+
+# Force values to min = 1 and max = 5
+preds$AnimScale <- scales::rescale(preds$Anim, to = c(1,5))
+preds$HarmScale <- scales::rescale(preds$Harm, to = c(1,5))
+preds$SizeScale <- scales::rescale(preds$Size, to = c(1,5))
+
+# Visualize the dataset
+head(preds)
+```
+
+
+Performance metric compared to the "true" qualitatively determined categories
+``` {r AccuracyScores, message = FALSE, warning = FALSE}
+
+# Add a column with accuracy score for each of the three classifications
+preds$AnimCorr <- ifelse(preds$AnimCat == 'Animate' & preds$AnimScale > median(preds$AnimScale) | 
+                           preds$AnimCat != 'Animate' & preds$AnimScale < median(preds$AnimScale), 1, 0)
+preds$HarmCorr <- ifelse(preds$HarmCat == 'Harmful' & preds$HarmScale > median(preds$HarmScale) | 
+                           preds$HarmCat != 'Harmful' & preds$HarmScale < median(preds$HarmScale), 1, 0)
+preds$SizeCorr <- ifelse(preds$SizeCat == 'Big' & preds$SizeScale > median(preds$SizeScale) | 
+                           preds$SizeCat != 'Big' & preds$SizeScale < median(preds$SizeScale), 1, 0)
+
+# Calculate accuracy
+harm_acc <- length(preds$HarmCorr[preds$HarmCorr == 1]) / 32
+size_acc <- length(preds$SizeCorr[preds$SizeCorr == 1]) / 32
+anim_acc <- length(preds$AnimCorr[preds$AnimCorr == 1]) / 32
+
+# Print it out
+print(paste("Accuracy animacy: ", as.character(anim_acc)))
+print(paste("Accuracy size: ", as.character(size_acc)))
+print(paste("Accuracy harm: ", as.character(harm_acc)))
+
+```
+
+Visualizing the predictions.
+``` {r Predictions, message = FALSE, warning = FALSE}
+
+library(ggrepel)
+
+# Plot predicted values
+# Animacy
+p_anim <- ggplot(data = preds, aes(y = factor(Word, levels = Word[order(AnimScale)]), x = AnimScale)) + 
+  geom_point(aes(color = AnimCat)) + geom_vline(xintercept = median(preds$AnimScale), linetype = 'dashed') +
+  xlab('') + ylab('') +
+  theme(legend.position = 'none', strip.text = element_text(size=25), 
+        panel.background = element_rect(fill='white', color = 'black'), 
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'), 
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted')) +
+  geom_text_repel(aes(label = ifelse(AnimCorr == 0, Word, ''))) +
+  ggtitle('Predicted Animacy Scores') +
+  scale_color_brewer(palette="Set1")
+
+# Harmfulness
+p_harm <- ggplot(data = preds, aes(y = factor(Word, levels = Word[order(Harm)]), x = HarmScale)) +
+  geom_point(aes(color = HarmCat)) + geom_vline(xintercept = median(preds$HarmScale), linetype = 'dashed') +
+  xlab('') + ylab('') +
+  theme(legend.position = 'none', strip.text = element_text(size=25),
+        panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted')) +
+  geom_text_repel(aes(label = ifelse(HarmCorr == 0, Word, ''))) +
+  ggtitle('Predicted Harmfulness Scores') +
+  scale_color_brewer(palette="Set1")
+
+# Size
+p_size <- ggplot(data = preds, aes(y = factor(Word, levels = Word[order(SizeScale)]), x = SizeScale)) +
+  geom_point(aes(color = SizeCat)) + geom_vline(xintercept = median(preds$SizeScale), linetype = 'dashed') +
+  xlab('') + ylab('') +
+  theme(legend.position = 'none', strip.text = element_text(size=25),
+        panel.background = element_rect(fill='white', color = 'black'),
+        panel.grid.major = element_line(color = 'grey', linetype = 'dotted'),
+        panel.grid.minor = element_line(color = 'grey', linetype = 'dotted')) +
+  geom_text_repel(aes(label = ifelse(SizeCorr == 0, Word, ''))) + ggtitle('Predicted Size Scores') +
+  scale_color_brewer(palette="Set1")
+
+p_anim
+p_harm
+p_size
+
+
+```
+
+Last step: let's save the data with both categorical coding and scores (true for exp.1 and predicted for exp.2). 
+This will be later used for the parametric analysis of the data
+First **save experiment 1**
+``` {r ReshapeAndSave1, message = FALSE, warning = FALSE}
+
+# Subset overall data with words from Experiment 1
+exp_words_1 <- c('bull', 'shark', 'hyena', 'snake', 'bee', 'flea', 'spider', 'rat', 'camel','goose',
+                 'lamb', 'penguin', 'cricket', 'kitten', 'robin', 'shrimp', 'bomb', 'jail', 'rocket',
+                 'rifle', 'burner', 'dagger', 'needle', 'thorn', 'bench', 'couch', 'tent', 'cradle', 
+                 'coin', 'comb', 'cookie', 'soap')
+wv_exp1 <- subset(all_df, Noun %in% exp_words_1)
+exp_1_final <- wv_exp1[, c('Noun', 'animacy', 'size_loaf', 'harm', 'Animate', 'SizeLoaf', 'Harm')]
+# Rename columns
+colnames(exp_1_final) <- c('Noun', 'AnimScore', 'SizeScore', 'HarmScore', 'AnimCat', 'SizeCat', 'HarmCat')
+# Add information on category, alongside score
+exp_1_final$AnimCat <- ifelse(exp_1_final$AnimCat == 1, 'Animate', 'Inanimate')
+exp_1_final$HarmCat <- ifelse(exp_1_final$HarmCat == 1, 'Harmful', 'Harmless')
+exp_1_final$SizeCat <- ifelse(exp_1_final$SizeCat == 1,' Big', 'Small')
+#write_tsv(exp_1_final, 'exp1.txt')
+
+```
+
+Save experiment 2
+``` {r ReshapeAndSave2, message = FALSE, warning = FALSE}
+
+# Pick relevant columns only and rename them as the ones from experiment 2
+exp_2_final <- preds[, c('Word', 'AnimScale', 'Size', 'Harm', 'AnimCat', 'SizeCat', 'HarmCat')]
+colnames(exp_2_final) <- colnames(exp_1_final)
+# Fix some coding error
+exp_2_final$AnimCat <- ifelse(exp_2_final$AnimCat == 'Animate', 'Animate', 'Inanimate')
+rownames(exp_2_final) <- exp_2_final$Noun
+
+# Create an overall dataframe
+all_final <- rbind(exp_1_final, exp_2_final)
+  
+# Save
+#write_tsv(exp_2_final, 'exp2.txt')
+
+```
